@@ -1,10 +1,40 @@
 # BTC HD Wallet Monitor
 
-Docker-first Bitcoin HD wallet address monitor for **wallets you control**.
+Docker-first Bitcoin HD wallet address generator/monitor for **wallets you control**.
 
-This project creates or restores one BIP39 wallet, encrypts the derived BIP39 seed with Argon2id + AES-256-GCM, derives BIP44 Legacy Bitcoin addresses (`m/44'/0'/0'/0/i`), stores address/balance state in SQLite, checks balances through mempool.space, and sends a separate Telegram alert when an address becomes positive or its positive balance changes.
+This project creates or restores one BIP39 wallet, encrypts the derived BIP39 seed with Argon2id + AES-256-GCM, derives BIP44 Legacy Bitcoin addresses (`m/44'/0'/0'/0/i`), stores address/balance state in SQLite, checks balances through mempool.space, and can send Telegram alerts.
 
 > Security boundary: this project does not brute-force random private keys or scan for third-party wallets. It only derives addresses from the wallet initialized or restored by the operator.
+
+## Default runtime behavior
+
+The default Docker Compose service now does exactly this:
+
+```text
+Derive 1 new P2PKH address
+        ↓
+Store it in SQLite
+        ↓
+Scan only that new address once
+        ↓
+Persist balance / tx count
+        ↓
+If balance > 0, send Telegram alert
+        ↓
+Sleep 5 seconds
+        ↓
+Repeat forever
+```
+
+Historical addresses are **not automatically rescanned** by the default service.
+
+When you want to rescan every stored address manually:
+
+```bash
+docker compose run --rm worker scan-all
+```
+
+`scan-once` is kept as a backward-compatible alias for the same full-wallet manual scan.
 
 ## Security model
 
@@ -59,10 +89,10 @@ A wrong password, modified ciphertext, wrong nonce or wrong AAD causes AES-GCM a
 - cipher/KDF version
 
 `wallet_addresses`:
-- derivation path
+- derivation index/path
 - P2PKH Base58Check address
 - compressed public key
-- balance in satoshis
+- last known balance in satoshis
 - tx count
 - last checked time
 - last notified positive balance
@@ -76,7 +106,20 @@ printf '%s' 'USE-A-STRONG-UNIQUE-PASSWORD' > secrets/master_password
 chmod 600 secrets/master_password
 ```
 
-Set Telegram values in `.env` if wanted, then build:
+Optional Telegram configuration in `.env`:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+Default generation interval:
+
+```dotenv
+GENERATE_INTERVAL_SECONDS=5
+```
+
+Build:
 
 ```bash
 docker compose build
@@ -87,64 +130,52 @@ docker compose build
 This prints the mnemonic **once**. Back it up offline.
 
 ```bash
-docker compose run --rm monitor init --count 20
+docker compose run --rm worker init --count 1
 ```
 
 ### Restore an existing BIP39 wallet
 
 ```bash
-docker compose run --rm monitor restore --count 20
+docker compose run --rm worker restore --count 1
 ```
 
-You will be prompted for the mnemonic. Do not put it in shell history.
-
-### Add more receive addresses
+### Start the 5-second generator
 
 ```bash
-docker compose run --rm monitor derive --count 20
-```
-
-### Show address state
-
-```bash
-docker compose run --rm monitor list-addresses
-```
-
-### Export one WIF private key
-
-```bash
-docker compose run --rm monitor export-wif --index 0
-```
-
-The WIF is printed to stdout. Treat terminal scrollback as sensitive.
-
-### Start monitoring
-
-```bash
-docker compose up -d monitor
+docker compose up -d worker
 ```
 
 Logs:
 
 ```bash
-docker compose logs -f monitor
+docker compose logs -f worker
 ```
 
-## Telegram
+### Derive and scan exactly one new address manually
 
-Set:
-
-```dotenv
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_CHAT_ID=123456789
+```bash
+docker compose run --rm worker derive-scan
 ```
 
-The monitor alerts separately per address when:
+### Manually scan all historical addresses
 
-1. balance changes from `0` to `> 0`, or
-2. an already-positive balance changes.
+```bash
+docker compose run --rm worker scan-all
+```
 
-It does not alert every scan when the balance is unchanged.
+### List stored addresses
+
+```bash
+docker compose run --rm worker list-addresses
+```
+
+### Export one WIF private key
+
+```bash
+docker compose run --rm worker export-wif --index 0
+```
+
+The WIF is printed to stdout. Treat terminal scrollback as sensitive.
 
 ## Balance provider
 
@@ -152,12 +183,6 @@ Default provider is the public mempool.space REST API:
 
 ```dotenv
 MEMPOOL_API_BASE=https://mempool.space/api
-```
-
-Confirmed balance is calculated as:
-
-```text
-chain_stats.funded_txo_sum - chain_stats.spent_txo_sum
 ```
 
 Use a self-hosted mempool instance by changing the base URL.
@@ -173,6 +198,22 @@ The mnemonic alone can reconstruct the wallet. The encrypted DB additionally pre
 
 Never keep the mnemonic, master-password file and database backup in the same place.
 
+## Commands
+
+```text
+init [--count N]            create encrypted wallet and initial addresses
+restore [--count N]         restore from a BIP39 mnemonic
+derive [--count N]          derive addresses without scanning
+derive-scan                 derive 1 new address and scan only it once
+generate-forever            repeat derive-scan using GENERATE_INTERVAL_SECONDS
+list-addresses              show stored addresses and last known balances
+scan-all                    manually scan every stored address once
+scan-once                   alias of scan-all
+monitor                     legacy continuous full-wallet rescanner (not default)
+export-wif --index N        decrypt seed and derive one WIF private key
+healthcheck                 verify SQLite is reachable
+```
+
 ## Local development
 
 ```bash
@@ -182,22 +223,9 @@ pip install -e '.[dev]'
 pytest
 ```
 
-## Commands
-
-```text
-init [--count N]            create encrypted wallet and first N addresses
-restore [--count N]         restore from a BIP39 mnemonic
-derive [--count N]          derive N more addresses
-list-addresses              print monitored addresses and balances
-scan-once                   check all addresses once
-monitor                     continuously scan
-export-wif --index N        decrypt seed and derive one WIF private key
-healthcheck                 verify SQLite is reachable
-```
-
 ## Important operational notes
 
 - Do not commit `.env`, `data/`, `secrets/`, wallet DBs, mnemonics or exported private keys.
-- Use a long, unique master password. Losing both the mnemonic and master password makes encrypted seed recovery impossible.
-- Public APIs can rate-limit. Increase `SCAN_INTERVAL_SECONDS` when monitoring many addresses or use your own mempool instance.
+- Use a long, unique master password.
+- Public APIs can rate-limit. A 5-second interval is one new-address lookup every 5 seconds; manual `scan-all` can generate many requests if the database is large.
 - SQLite permissions should be restricted to the container/service account.

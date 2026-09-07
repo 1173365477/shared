@@ -10,6 +10,7 @@ class Settings:
     db_path: str
     mempool_api_base: str
     scan_interval_seconds: int
+    generate_interval_seconds: float
     request_timeout_seconds: int
     telegram_bot_token: str | None
     telegram_chat_id: str | None
@@ -21,10 +22,16 @@ def load_settings() -> Settings:
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip() or None
     secret_file = os.getenv("MASTER_PASSWORD_FILE", "").strip() or None
 
+    try:
+        generate_interval = float(os.getenv("GENERATE_INTERVAL_SECONDS", "5"))
+    except ValueError:
+        generate_interval = 5.0
+
     return Settings(
         db_path=os.getenv("DB_PATH", "/data/wallet.db"),
         mempool_api_base=os.getenv("MEMPOOL_API_BASE", "https://mempool.space/api").rstrip("/"),
         scan_interval_seconds=max(5, int(os.getenv("SCAN_INTERVAL_SECONDS", "60"))),
+        generate_interval_seconds=max(0.1, generate_interval),
         request_timeout_seconds=max(1, int(os.getenv("REQUEST_TIMEOUT_SECONDS", "15"))),
         telegram_bot_token=token,
         telegram_chat_id=chat_id,

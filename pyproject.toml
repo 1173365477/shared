@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "btc-hd-wallet-monitor"
+version = "1.0.0"
+description = "Docker-first encrypted Bitcoin HD wallet address monitor"
+requires-python = ">=3.11"
+dependencies = [
+  "argon2-cffi>=23.1.0",
+  "bip-utils>=2.9.3",
+  "cryptography>=43.0.0",
+  "requests>=2.32.0",
+  "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+btc-wallet-monitor = "btc_wallet_monitor.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["btc_wallet_monitor*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

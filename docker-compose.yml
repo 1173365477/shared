@@ -1,0 +1,27 @@
+services:
+  monitor:
+    build: .
+    restart: unless-stopped
+    command: ["monitor"]
+    environment:
+      DB_PATH: ${DB_PATH:-/data/wallet.db}
+      MEMPOOL_API_BASE: ${MEMPOOL_API_BASE:-https://mempool.space/api}
+      SCAN_INTERVAL_SECONDS: ${SCAN_INTERVAL_SECONDS:-60}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-15}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      MASTER_PASSWORD_FILE: /run/secrets/master_password
+    volumes:
+      - ./data:/data
+    secrets:
+      - master_password
+    healthcheck:
+      test: ["CMD", "btc-wallet-monitor", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+secrets:
+  master_password:
+    file: ./secrets/master_password

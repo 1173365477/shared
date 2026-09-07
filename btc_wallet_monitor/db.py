@@ -19,6 +19,7 @@ class AddressRow:
     tx_count: int
     last_checked_at: str | None
     last_notified_balance_sat: int
+    created_at: str
 
 
 class Database:

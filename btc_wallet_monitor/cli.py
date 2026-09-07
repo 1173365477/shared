@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import logging
+import time
 
 import typer
 from cryptography.exceptions import InvalidTag
@@ -56,8 +57,15 @@ def _derive_many(db: Database, seed: bytes, count: int) -> tuple[int, int]:
     return start, start + count - 1
 
 
+def _derive_one(db: Database, seed: bytes):
+    index = db.next_derivation_index()
+    item = derive_address(seed, index)
+    db.insert_address(item.index, item.path, item.address, item.public_key_hex)
+    return db.get_address_by_index(index)
+
+
 @app.command("init")
-def init_wallet(count: int = typer.Option(20, min=1, max=10000)) -> None:
+def init_wallet(count: int = typer.Option(1, min=1, max=10000)) -> None:
     """Create a new 24-word BIP39 wallet and encrypted seed store."""
     db = _db()
     if db.wallet_exists():
@@ -75,7 +83,7 @@ def init_wallet(count: int = typer.Option(20, min=1, max=10000)) -> None:
 
 
 @app.command("restore")
-def restore_wallet(count: int = typer.Option(20, min=1, max=10000)) -> None:
+def restore_wallet(count: int = typer.Option(1, min=1, max=10000)) -> None:
     """Restore a wallet from an operator-supplied BIP39 mnemonic."""
     db = _db()
     if db.wallet_exists():
@@ -94,8 +102,8 @@ def restore_wallet(count: int = typer.Option(20, min=1, max=10000)) -> None:
 
 
 @app.command("derive")
-def derive_more(count: int = typer.Option(20, min=1, max=10000)) -> None:
-    """Derive more P2PKH receive addresses from the encrypted wallet."""
+def derive_more(count: int = typer.Option(1, min=1, max=10000)) -> None:
+    """Derive more P2PKH receive addresses without scanning them."""
     db = _db()
     seed = _decrypt_wallet(db)
     start, end = _derive_many(db, seed, count)
@@ -104,7 +112,7 @@ def derive_more(count: int = typer.Option(20, min=1, max=10000)) -> None:
 
 @app.command("list-addresses")
 def list_addresses() -> None:
-    """Print monitored addresses without exposing private keys."""
+    """Print stored addresses and their last known balance without exposing private keys."""
     db = _db()
     rows = db.list_addresses()
     typer.echo("index\tbalance_sat\ttx_count\tpath\taddress")
@@ -128,23 +136,70 @@ def _service() -> MonitorService:
     return MonitorService(db, provider, notifier, settings.scan_interval_seconds)
 
 
-@app.command("scan-once")
-def scan_once() -> None:
-    """Check all derived addresses once."""
+def _scan_new_address(db: Database, seed: bytes, service: MonitorService) -> bool:
+    row = _derive_one(db, seed)
+    typer.echo(
+        f"Derived index={row.derivation_index} path={row.derivation_path} address={row.address}"
+    )
+    ok = service.scan_address(row)
+    if not ok:
+        typer.echo(
+            f"Balance check failed for index={row.derivation_index}; address remains stored for a later manual scan.",
+            err=True,
+        )
+    return ok
+
+
+@app.command("derive-scan")
+def derive_scan() -> None:
+    """Derive exactly one new address and scan only that new address once."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    db = _db()
+    seed = _decrypt_wallet(db)
+    service = _service()
+    _scan_new_address(db, seed, service)
+
+
+@app.command("generate-forever")
+def generate_forever() -> None:
+    """Continuously derive one new address, scan only it once, then sleep."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    settings = load_settings()
+    db = _db()
+    seed = _decrypt_wallet(db)
+    service = _service()
+
+    typer.echo(
+        f"Generator started: one new address every {settings.generate_interval_seconds:g} seconds"
+    )
+    while True:
+        _scan_new_address(db, seed, service)
+        time.sleep(settings.generate_interval_seconds)
+
+
+@app.command("scan-all")
+def scan_all() -> None:
+    """Manually scan every stored address once."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     _service().scan_once()
 
 
+@app.command("scan-once")
+def scan_once() -> None:
+    """Backward-compatible alias: manually scan every stored address once."""
+    scan_all()
+
+
 @app.command("monitor")
 def monitor() -> None:
-    """Continuously monitor all derived addresses."""
+    """Legacy command: continuously rescan all stored addresses."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     _service().run_forever()
 
 
 @app.command("export-wif")
 def export_wif(index: int = typer.Option(..., min=0)) -> None:
-    """Decrypt the seed and export one monitored address private key in compressed WIF."""
+    """Decrypt the seed and export one stored address private key in compressed WIF."""
     db = _db()
     row = db.get_address_by_index(index)
     seed = _decrypt_wallet(db)
